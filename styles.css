@@ -134,6 +134,10 @@ canvas[data-testid="orbit-canvas"] {
   min-height: 0;
   position: relative;
   z-index: 2;
+  /* Without this, a real touchscreen is free to treat the drag as a native
+     pan/scroll/zoom gesture, which can fire pointercancel mid-interaction ---
+     desktop mouse input has no such competing gesture. */
+  touch-action: none;
 }
 
 footer {

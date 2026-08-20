@@ -193,7 +193,14 @@ function getAudioContext(): AudioContext {
     audioContext = new AudioContext();
   }
   if (audioContext.state === "suspended") {
-    void audioContext.resume();
+    // Called synchronously within the pointerdown/pointermove gesture handler
+    // (see startVoice), so this still counts as gesture-triggered on mobile.
+    // Only the *handling* of the result is async --- surfaced here instead of
+    // swallowed, since a rejection would otherwise leave the context silently
+    // suspended with no signal that audio can never play.
+    audioContext.resume().catch((error) => {
+      console.error("Guitar Orbit: AudioContext.resume() rejected", error);
+    });
   }
   return audioContext;
 }
@@ -310,9 +317,18 @@ export function startVoice(note: string, normalizedAngle: number): void {
         if (state === "releasing") state = nextVoiceState(state, "end");
         return;
       }
+      if (ctx.state !== "running") {
+        // By the time addModule has resolved, the gesture-triggered resume()
+        // above should long since have settled. Still not "running" here is
+        // an actionable signal (not just silence) that audio will not sound.
+        console.error(
+          `Guitar Orbit: AudioContext is "${ctx.state}", not "running" --- audio will stay silent until it resumes.`,
+        );
+      }
       voice = createVoiceNodes(ctx, note, normalizedAngle);
     })
-    .catch(() => {
+    .catch((error) => {
+      console.error("Guitar Orbit: failed to load the Karplus-Strong AudioWorklet module", error);
       state = "idle";
     });
 }
