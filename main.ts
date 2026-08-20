@@ -1,9 +1,26 @@
-// Draws the central guitar and six concentric rings, and (new in this
-// stage) tracks a single active pointer against the geometry module to
-// highlight whichever ring it's currently over. No audio yet, no filter
-// mapping, no ripple/connector polish --- those land in later stages.
+// Draws the central guitar and six concentric rings, tracks a single active
+// pointer against the geometry module to highlight whichever ring it's
+// currently over, and drives the Web Audio voice in audio.ts from that same
+// pointer/ring state. No ripple/connector-line polish yet --- that lands in
+// a later stage.
 
-import { RING_COUNT, classifyRing, computeGeometry, distanceFromCentre, resolveRing } from "./geometry.ts";
+import {
+  RING_COUNT,
+  angleFromCentre,
+  classifyRing,
+  computeGeometry,
+  distanceFromCentre,
+  normalizedAngle,
+  noteForRing,
+  resolveRing,
+} from "./geometry.ts";
+import {
+  releaseVoice,
+  startVoice,
+  updateVoiceFilterCutoff,
+  updateVoiceFrequency,
+  voiceState,
+} from "./audio.ts";
 
 const canvas = document.querySelector<HTMLCanvasElement>(
   '[data-testid="orbit-canvas"]',
@@ -77,6 +94,7 @@ function setActiveRing(ring: number | null): void {
 
 function handlePointerDown(event: PointerEvent): void {
   if (!canvas || activePointerId !== null) return; // ignore a second concurrent pointer
+  if (voiceState() !== "idle") return; // previous voice is still releasing --- ignore this press entirely
 
   const { x, y } = pointerLocalPosition(event);
   const rect = canvas.getBoundingClientRect();
@@ -91,6 +109,10 @@ function handlePointerDown(event: PointerEvent): void {
 
   activePointerId = event.pointerId;
   setActiveRing(ring);
+
+  const note = noteForRing(ring);
+  const angle = normalizedAngle(angleFromCentre(x, y, geometry));
+  if (note) startVoice(note, angle);
 }
 
 function handlePointerMove(event: PointerEvent): void {
@@ -100,14 +122,37 @@ function handlePointerMove(event: PointerEvent): void {
   const rect = canvas.getBoundingClientRect();
   const geometry = computeGeometry(rect.width, rect.height);
   const radius = distanceFromCentre(x, y, geometry);
-  const ring = resolveRing(radius, activeRing, geometry);
+  const previousRing = activeRing;
+  const ring = resolveRing(radius, previousRing, geometry);
   setActiveRing(ring);
+
+  if (ring === null) {
+    // The drag moved into the dead zone or past the outer edge. This ends
+    // the play interaction outright, the same as lifting the pointer:
+    // release the voice, and clear ownership so this same physical pointer
+    // cannot resume playing just by dragging back into a ring --- only a
+    // fresh pointerdown may start a new voice. No muted-but-alive voice,
+    // no voice stealing: exactly one voice can ever exist.
+    activePointerId = null;
+    releaseVoice();
+    return;
+  }
+
+  const note = noteForRing(ring);
+  if (!note) return;
+
+  const angle = normalizedAngle(angleFromCentre(x, y, geometry));
+  if (ring !== previousRing) {
+    updateVoiceFrequency(note);
+  }
+  updateVoiceFilterCutoff(angle);
 }
 
 function handlePointerEnd(event: PointerEvent): void {
   if (event.pointerId !== activePointerId) return;
   activePointerId = null;
   setActiveRing(null);
+  releaseVoice();
 }
 
 draw();
