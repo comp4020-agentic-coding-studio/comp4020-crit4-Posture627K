@@ -1,12 +1,19 @@
-// Static scaffold: draws the central guitar and six concentric rings once,
-// resized from the viewport's smaller dimension. No pointer handling, no
-// audio, and no ring highlighting yet --- those land in later stages.
+// Draws the central guitar and six concentric rings, and (new in this
+// stage) tracks a single active pointer against the geometry module to
+// highlight whichever ring it's currently over. No audio yet, no filter
+// mapping, no ripple/connector polish --- those land in later stages.
 
-const RING_COUNT = 6;
+import { RING_COUNT, classifyRing, computeGeometry, distanceFromCentre, resolveRing } from "./geometry.ts";
 
 const canvas = document.querySelector<HTMLCanvasElement>(
   '[data-testid="orbit-canvas"]',
 );
+
+// The pointer currently driving the instrument, if any --- only one at a
+// time (a second concurrent pointer is ignored outright), and only a
+// pointer whose `pointerdown` landed inside a playable ring counts as one.
+let activePointerId: number | null = null;
+let activeRing: number | null = null;
 
 function draw(): void {
   if (!canvas) return;
@@ -22,10 +29,8 @@ function draw(): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
-  const centerX = width / 2;
-  const centerY = height / 2;
-  const outerRadius = Math.min(width, height) * 0.45;
-  const innerRadius = outerRadius * 0.2;
+  const geometry = computeGeometry(width, height);
+  const { centerX, centerY, innerRadius, outerRadius, ringWidth } = geometry;
 
   // Central guitar --- a simple, non-playable silhouette.
   ctx.fillStyle = "#8a5a2b";
@@ -48,16 +53,69 @@ function draw(): void {
   );
 
   // Six concentric playable rings, inner (lower notes) to outer (higher notes).
-  ctx.strokeStyle = "#3a3a3a";
-  ctx.lineWidth = 1.5;
   for (let ring = 1; ring <= RING_COUNT; ring++) {
-    const radius =
-      innerRadius + ((outerRadius - innerRadius) * ring) / RING_COUNT;
+    const radius = innerRadius + ringWidth * ring;
+    const isActive = ring === activeRing;
     ctx.beginPath();
     ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = isActive ? "#0b5fff" : "#3a3a3a";
+    ctx.lineWidth = isActive ? 4 : 1.5;
     ctx.stroke();
   }
 }
 
+function pointerLocalPosition(event: PointerEvent): { x: number; y: number } {
+  const rect = canvas!.getBoundingClientRect();
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+}
+
+function setActiveRing(ring: number | null): void {
+  if (ring === activeRing) return;
+  activeRing = ring;
+  draw();
+}
+
+function handlePointerDown(event: PointerEvent): void {
+  if (!canvas || activePointerId !== null) return; // ignore a second concurrent pointer
+
+  const { x, y } = pointerLocalPosition(event);
+  const rect = canvas.getBoundingClientRect();
+  const geometry = computeGeometry(rect.width, rect.height);
+  const radius = distanceFromCentre(x, y, geometry);
+  const ring = classifyRing(radius, geometry);
+
+  // Pressing the central guitar area or outside the outer ring does
+  // nothing --- this pointer is never adopted as the active one, so its
+  // later move/up events are ignored too.
+  if (ring === null) return;
+
+  activePointerId = event.pointerId;
+  setActiveRing(ring);
+}
+
+function handlePointerMove(event: PointerEvent): void {
+  if (!canvas || event.pointerId !== activePointerId) return; // hover, or not the active pointer
+
+  const { x, y } = pointerLocalPosition(event);
+  const rect = canvas.getBoundingClientRect();
+  const geometry = computeGeometry(rect.width, rect.height);
+  const radius = distanceFromCentre(x, y, geometry);
+  const ring = resolveRing(radius, activeRing, geometry);
+  setActiveRing(ring);
+}
+
+function handlePointerEnd(event: PointerEvent): void {
+  if (event.pointerId !== activePointerId) return;
+  activePointerId = null;
+  setActiveRing(null);
+}
+
 draw();
 window.addEventListener("resize", draw);
+
+if (canvas) {
+  canvas.addEventListener("pointerdown", handlePointerDown);
+  canvas.addEventListener("pointermove", handlePointerMove);
+  canvas.addEventListener("pointerup", handlePointerEnd);
+  canvas.addEventListener("pointercancel", handlePointerEnd);
+}
